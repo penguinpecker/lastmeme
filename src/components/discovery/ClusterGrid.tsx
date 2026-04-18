@@ -58,7 +58,7 @@ export function ClusterGrid({ clusters }: { clusters: Cluster[] }) {
       {filtered.length === 0 ? (
         <div className="border border-dashed border-bone/30 bg-ink-2 px-5 py-8 text-center">
           <p className="font-mono text-[16px] text-bone/70">
-            &gt; no clusters yet — waiting for the firehose to deliver derivatives
+            &gt; no clusters yet — waiting for the firehose to deliver similar tokens
           </p>
           <p className="mt-2 font-mono text-[13px] text-bone/45">
             new pools arrive every ~30s · clustering threshold: 0.55 bigram jaccard + substring

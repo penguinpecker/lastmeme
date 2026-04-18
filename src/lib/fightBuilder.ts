@@ -77,10 +77,10 @@ export function buildFightFromCluster(
   const sorted = [...tokens].sort((a, b) => (b.liquidityUsd ?? 0) - (a.liquidityUsd ?? 0));
   const [a, b] = sorted;
 
-  // Which launched first → "original", the other is the derivative
+  // Which launched first — we just surface the order, no judgment
   const aFirst = (a.createdAtIso ?? "") < (b.createdAtIso ?? "");
   const original = aFirst ? a : b;
-  const derivative = aFirst ? b : a;
+  const secondLaunch = aFirst ? b : a;
   const hoursApart = Math.abs((a.ageHours ?? 0) - (b.ageHours ?? 0));
 
   const scoreA = scoreToken(a);
@@ -94,11 +94,11 @@ export function buildFightFromCluster(
   const oddsB = (totalPool / poolB).toFixed(2);
 
   const priorArt: string[] = [
-    `cluster theme: ${cluster.theme.toLowerCase()} · ${cluster.tokenCount} derivative tokens identified`,
-    `${cluster.overlapPct}% avg name/symbol overlap across cluster`,
-    `${original.symbol} launched first · ${hoursApart.toFixed(1)}h before ${derivative.symbol}`,
-    `${derivative.symbol} identified as derivative (later launch, ${cluster.overlapPct}% overlap)`,
-    `verdict: DERIVATIVE_DETECTED_`,
+    `cluster theme: ${cluster.theme.toLowerCase()} · ${cluster.tokenCount} similar tokens found`,
+    `${cluster.overlapPct.toFixed(0)}% avg name/embedding overlap across cluster`,
+    `${original.symbol} launched first · ${hoursApart.toFixed(1)}h before ${secondLaunch.symbol}`,
+    `${cluster.leaderSymbol ?? a.symbol} is the current leader by market cap`,
+    `sells of non-leader tokens through this UI route fees to the leader's creator`,
   ];
 
   return {

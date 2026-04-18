@@ -1,6 +1,8 @@
 node_modules/
 .next/
 out/
+dist/
+build/
 .env
 .env.local
 .env.*.local
@@ -10,3 +12,9 @@ out/
 .idea/
 *.tsbuildinfo
 next-env.d.ts
+
+# Foundry
+/out/
+/cache/
+/broadcast/
+/lib/forge-std/

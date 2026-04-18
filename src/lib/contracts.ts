@@ -40,8 +40,12 @@ export const tokenManagerAbi = [
     name: "sellToken",
     stateMutability: "nonpayable",
     inputs: [
+      { name: "origin", type: "uint256" },
       { name: "token", type: "address" },
       { name: "amount", type: "uint256" },
+      { name: "minFunds", type: "uint256" },
+      { name: "feeRate", type: "uint256" },
+      { name: "feeRecipient", type: "address" },
     ],
     outputs: [],
   },

@@ -1,13 +1,19 @@
-import { fetchBscTokenSample } from "./fourmeme";
+import { fetchFourMemeTokens } from "./fourmeme";
 import { clusterTokens } from "./cluster";
 import type { Cluster, Token } from "./types";
 
 /**
- * Top-level data loader. Runs only on the server (uses fetch with `next.revalidate`).
- * Returns fully-clustered tokens + clusters + unclustered in a single call.
+ * Top-level data loader. Runs only on the server.
  *
- * Pages import { loadLiveData } and use await — Next caches the response for 60s so
- * we're well under the 30 req/min GT rate limit.
+ * Pipeline:
+ *   1. Pull live tokens from Four.Meme's own REST API (no auth)
+ *   2. Cluster them by OpenAI text-embedding-3-small (needs OPENAI_API_KEY)
+ *      — fallback to bigram Jaccard if key is missing
+ *   3. Return clusters + clustered tokens + unclustered ("lonely") tokens
+ *
+ * Next caches each page render for 60s via `revalidate = 60` on the pages,
+ * so we're hitting Four.Meme once/minute and OpenAI once/minute regardless
+ * of frontend traffic.
  */
 
 export interface LiveData {
@@ -16,29 +22,38 @@ export interface LiveData {
   unclustered: Token[];
   generatedAt: string;
   sourceCount: number;
+  clusterEngine: "openai-embeddings" | "bigram-jaccard-fallback";
+  bnbUsd: number;
   error?: string;
 }
 
 export async function loadLiveData(): Promise<LiveData> {
   try {
-    const sample = await fetchBscTokenSample();
-    if (sample.length === 0) {
+    const result = await fetchFourMemeTokens(80);
+    if (result.tokens.length === 0) {
       return {
         clusters: [],
         clusteredTokens: [],
         unclustered: [],
         generatedAt: new Date().toISOString(),
         sourceCount: 0,
-        error: "No tokens returned from GeckoTerminal. API may be rate-limiting.",
+        clusterEngine: "openai-embeddings",
+        bnbUsd: result.bnbUsd,
+        error: result.error ?? "No tokens returned from Four.Meme API.",
       };
     }
-    const { clusters, tokens, unclustered } = clusterTokens(sample);
+
+    const clustered = await clusterTokens(result.tokens);
+
     return {
-      clusters,
-      clusteredTokens: tokens,
-      unclustered,
+      clusters: clustered.clusters,
+      clusteredTokens: clustered.clusteredTokens,
+      unclustered: clustered.unclusteredTokens,
       generatedAt: new Date().toISOString(),
-      sourceCount: sample.length,
+      sourceCount: result.tokens.length,
+      clusterEngine: clustered.engine,
+      bnbUsd: result.bnbUsd,
+      error: result.error ?? clustered.error,
     };
   } catch (e) {
     return {
@@ -47,6 +62,8 @@ export async function loadLiveData(): Promise<LiveData> {
       unclustered: [],
       generatedAt: new Date().toISOString(),
       sourceCount: 0,
+      clusterEngine: "openai-embeddings",
+      bnbUsd: 600,
       error: e instanceof Error ? e.message : "Unknown error fetching live data",
     };
   }

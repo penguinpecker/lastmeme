@@ -25,12 +25,12 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LastMeme.fm — Plagiarism court for memecoins",
+  title: "LastMeme.fm — similar-token clustering for Four.Meme",
   description:
-    "Real-time plagiarism detection for Four.Meme on BSC. Derivative tokens fight. Winner absorbs loser creator fees for 7 days. Buy directly on-chain.",
+    "Real-time clustering of similar tokens launched on Four.Meme (BSC). Find the leader in each cluster, buy on-chain, route fees to the leader's creator on sells.",
   openGraph: {
     title: "LastMeme.fm",
-    description: "One cluster enters. One leaves.",
+    description: "Group the copies. Back the leader. Trade on-chain.",
     type: "website",
   },
 };

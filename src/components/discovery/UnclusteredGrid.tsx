@@ -22,7 +22,7 @@ export function UnclusteredGrid({ tokens }: { tokens: Token[] }) {
       </div>
       {display.length === 0 ? (
         <p className="font-mono text-[15px] text-bone/50">
-          &gt; every incoming token matched a cluster · suspiciously derivative day
+          &gt; every incoming token matched a cluster · suspiciously copycat day
         </p>
       ) : (
         <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>

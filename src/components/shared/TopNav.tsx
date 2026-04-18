@@ -6,9 +6,8 @@ import { cn } from "@/lib/utils";
 import { CONSTANTS } from "@/lib/mock";
 
 const LINKS: { href: string; label: string }[] = [
-  { href: "/", label: "FIGHTS" },
+  { href: "/", label: "CLUSTERS" },
   { href: "/queue", label: "QUEUE" },
-  { href: "/shame", label: "HALL OF SHAME" },
   { href: "/docs", label: "DOCS" },
 ];
 

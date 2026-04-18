@@ -14,8 +14,6 @@ function typeColor(t: FirehoseEvent["type"]) {
       return "text-hazard-amber";
     case "CLUSTER":
       return "text-hazard-amber";
-    case "VERDICT":
-      return "text-hazard-red";
   }
 }
 

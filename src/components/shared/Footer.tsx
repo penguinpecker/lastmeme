@@ -3,10 +3,10 @@ import { CONSTANTS } from "@/lib/mock";
 export function Footer({ extra = [] }: { extra?: string[] }) {
   const items = [
     `BSC // TOKENMGR V2 · ${CONSTANTS.tokenMgrAddress.slice(0, 6)}...${CONSTANTS.tokenMgrAddress.slice(-4)}`,
-    "VERDICT → IPFS",
-    "FEE REDIRECT 7D",
+    "DATA · FOUR.MEME API",
+    "FEES → LEADER CREATOR",
     ...extra,
-    "NO REFUNDS · NO MERCY",
+    "SELF-CUSTODY · ON-CHAIN",
   ];
   return (
     <div className="relative z-10 flex flex-wrap gap-2.5 border-t border-bone bg-ink px-6 py-3.5 font-mono text-[15px] text-bone/70">

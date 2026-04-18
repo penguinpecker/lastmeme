@@ -13,14 +13,14 @@ export default function DocsPage() {
         items={[
           "DOCS · HOW IT WORKS",
           "OPEN SOURCE · VERIFIABLE",
-          "EMBEDDING + ON-CHAIN DATA + FEE REDIRECT",
-          "NO TOKEN REQUIRED TO PARTICIPATE",
+          "FOUR.MEME API + OPENAI EMBEDDINGS + ON-CHAIN TRADES",
+          "NO TOKEN · NO CUSTODY · NO BETTING",
           "BUILT FOR FOUR.MEME · BNB CHAIN",
         ]}
       />
 
       <Hero
-        kicker=">> DOCS // HOW THIS ACTUALLY WORKS // APR 18 2026"
+        kicker=">> DOCS // HOW THIS ACTUALLY WORKS"
         line1="READ THE"
         line2="FINE PRINT"
         sub={
@@ -33,222 +33,189 @@ export default function DocsPage() {
 
       <div className="relative z-10 mx-auto max-w-[860px] px-6 pb-10 pt-4 md:px-8">
 
-        <DocsSection tag="&gt; 01_WHAT" title="WHAT IS LASTMEME">
+        <DocsSection tag="01" title="WHAT LASTMEME IS">
           <p>
-            LastMeme is a <span className="text-hazard-yellow">plagiarism court for memecoins</span>.
-            Four.Meme launches 1,000+ tokens per day. Most are derivative junk — copycats of
-            whatever just pumped. We scan every launch, cluster the derivatives by embedding
-            similarity, and force them to compete. The winning token absorbs the losing token's
-            creator fee stream for 7 days. On-chain. Auditable. No opt-in needed.
+            LastMeme is a discovery + trading interface for Four.Meme, the memecoin bonding-curve
+            launchpad on BNB Chain. Four.Meme launches ~1,000 tokens per day — many of which are
+            near-copies of whatever pumped last. We group those copies into clusters, flag the
+            leader of each cluster by market cap, and let you trade on-chain through your own
+            wallet.
           </p>
-          <p className="mt-3">
-            Think of it as <span className="text-hazard-lime">natural selection for the
-            launchpad</span>. Strong tokens eat weak ones. The graveyard fills up. The ecosystem
-            self-cleans.
+          <p className="mt-2 text-bone/70">
+            There is no betting. No staking. No custody. No contract of our own holding funds.
+            LastMeme never receives a transfer of your BNB or tokens — every trade routes
+            directly to Four.Meme&apos;s existing TokenManager V2 contract.
           </p>
         </DocsSection>
 
-        <DocsSection tag="&gt; 02_PIPELINE" title="THE PIPELINE">
+        <DocsSection tag="02" title="DATA SOURCE: FOUR.MEME API">
+          <p>
+            Every 60 seconds we pull two lists from Four.Meme&apos;s own public REST API:
+          </p>
           <StepRow
             n="01"
-            title="INGEST"
-            body={
-              <>
-                We tail Four.Meme's <span className="text-hazard-yellow">TokenCreate</span> events on
-                BSC TokenManager V2 ({CONSTANTS.tokenMgrAddress.slice(0, 8)}...). Every new token
-                drops into our indexer within ~12 seconds of its on-chain creation.
-              </>
-            }
+            title="PROGRESS list"
+            body="Tokens sorted by bonding-curve progress descending — closest to graduation first."
           />
           <StepRow
             n="02"
-            title="EMBED"
-            body={
-              <>
-                Token name + ticker + description → OpenAI{" "}
-                <span className="text-hazard-yellow">{CONSTANTS.embeddingModel}</span> → 1536-dim
-                vector. Logo → {CONSTANTS.visionModel} → 512-dim vector. Vectors stored in Postgres
-                with pgvector.
-              </>
-            }
+            title="VOL_DAY_1 list"
+            body="Tokens sorted by 24h volume descending — current trading heat."
+          />
+          <p className="mt-3">
+            Both lists are merged, deduped by contract address, filtered to status=PUBLISH on BSC.
+            Each record includes: <span className="text-hazard-yellow">tokenAddress</span>,{" "}
+            <span className="text-hazard-yellow">userAddress</span> (creator),{" "}
+            <span className="text-hazard-yellow">cap</span> (market cap in BNB),{" "}
+            <span className="text-hazard-yellow">progress</span>, holders, volume, logo URL, and
+            launch timestamp.
+          </p>
+          <CodeBlock>{`POST https://four.meme/meme-api/v1/public/token/ranking
+Content-Type: application/json
+
+{
+  "type": "PROGRESS",   // or "VOL_DAY_1"
+  "pageSize": 80,
+  "pageIndex": 1
+}`}</CodeBlock>
+        </DocsSection>
+
+        <DocsSection tag="03" title="CLUSTERING: OPENAI EMBEDDINGS">
+          <p>
+            Every token&apos;s <span className="text-hazard-yellow">name + symbol + slug</span> is
+            passed server-side to OpenAI&apos;s{" "}
+            <span className="text-hazard-yellow">{CONSTANTS.embeddingModel}</span> model. Each
+            token becomes a 1536-dimensional vector.
+          </p>
+          <p className="mt-2">
+            We then run single-linkage agglomerative clustering with cosine similarity threshold{" "}
+            <span className="text-hazard-yellow">{CONSTANTS.threshold}</span>. Any two tokens whose
+            cosine similarity exceeds the threshold join the same cluster. The cluster&apos;s
+            theme label is the most frequent alphabetic word across member names.
+          </p>
+          <StepRow
+            n="01"
+            title="Embed"
+            body="Batch 96 tokens per OpenAI call. text-embedding-3-small costs ~$0.00002 per token."
+          />
+          <StepRow
+            n="02"
+            title="Cluster"
+            body="Union-find over pairs where cos(a,b) ≥ 0.62. Deterministic — same tokens always cluster identically."
           />
           <StepRow
             n="03"
-            title="CLUSTER"
-            body={
-              <>
-                Every new vector is compared against existing cluster centroids. Cosine similarity
-                ≥ <span className="text-hazard-yellow">{CONSTANTS.threshold}</span> = match. Five or
-                more matches = the cluster crosses the fight threshold and enters the queue.
-              </>
-            }
+            title="Rank"
+            body="Sort members by market cap descending. Top one is the cluster leader."
           />
-          <StepRow
-            n="04"
-            title="SCORE"
-            body={
-              <>
-                For each matchup, we pull live on-chain data (holders, top-10 concentration, buyer
-                velocity, volume/liquidity ratio) and compute deterministic scores. Social sentiment
-                adds a capped multiplier.
-              </>
-            }
-          />
-          <StepRow
-            n="05"
-            title="RESOLVE"
-            body={
-              <>
-                Scores are hashed, verdict is pinned to IPFS, and our resolver contract on BSC
-                updates the <span className="text-hazard-yellow">feeRecipient</span> on the losing
-                token to redirect creator fees to the winner for 7 days.
-              </>
-            }
-          />
-        </DocsSection>
-
-        <DocsSection tag="&gt; 03_SCORING" title="THE SCORING FORMULA">
-          <p>
-            Five weighted signals, all measured on-chain (except X Buzz, which uses an LLM
-            sentiment enum capped at 10% of the total). Heavier weights on signals that{" "}
-            <span className="text-hazard-yellow">cost real money to fake</span>:
-          </p>
-          <CodeBlock>{`score =  0.30 × holderCount         // sybil-resistant
-       + 0.25 × distributionHealth  // top-10 concentration, inverted
-       + 0.20 × buyerVelocity24h    // new buyers in last hour
-       + 0.15 × volume ÷ liquidity  // wallet-capped
-       + 0.10 × socialSignal        // follower-weighted, bot-filtered`}</CodeBlock>
-          <p>
-            Both tokens get normalized 0–100 scores. Higher wins. In a 3-way or larger brawl, the
-            losers all contribute fees to the winner (see <em>Undercard</em>).
+          <p className="mt-3 text-bone/65">
+            API key is server-side only via <code className="text-hazard-yellow">OPENAI_API_KEY</code>.
+            If unset, the clusterer falls back to bigram Jaccard similarity so the app still renders.
           </p>
         </DocsSection>
 
-        <DocsSection tag="&gt; 04_CONTRACT" title="THE SETTLEMENT CONTRACT">
+        <DocsSection tag="04" title="BUY FLOW">
           <p>
-            Four.Meme's <code className="text-hazard-yellow">sellToken()</code> exposes a{" "}
-            <code className="text-hazard-yellow">feeRecipient</code> parameter. That's the hook.
-            Our resolver contract:
+            The buy button fetches a live quote via{" "}
+            <code className="text-hazard-yellow">tryBuy</code> from the Four.Meme TokenManager V2
+            contract. You pick an amount + slippage. On confirm, we call{" "}
+            <code className="text-hazard-yellow">buyTokenAMAP</code> directly from your wallet:
           </p>
-          <CodeBlock>{`function resolve(
-  address loser,
-  address winner,
-  bytes32 verdictHash,      // IPFS-pinned score evidence
-  bytes[] calldata sigs     // multi-sig from oracle set
-) external {
-  require(verifyOracles(verdictHash, sigs), "bad verdict");
-  feeRedirect[loser] = FeeRedirect({
-    recipient: winner,
-    expiresAt: block.timestamp + 7 days
-  });
-  emit Verdict(loser, winner, verdictHash);
-}`}</CodeBlock>
-          <p>
-            The loser's LP is untouched. The loser's holders are untouched. Only the{" "}
-            <span className="text-hazard-yellow">creator fee stream</span> redirects — a parameter
-            the protocol already exposes. No hacks, no rug, no funny business.
+          <CodeBlock>{`TokenManager2 at ${CONSTANTS.tokenMgrAddress.slice(0, 12)}...${CONSTANTS.tokenMgrAddress.slice(-6)}
+
+function buyTokenAMAP(
+  address token,
+  address to,         // recipient — your wallet
+  uint256 funds,      // BNB amount
+  uint256 minAmount   // slippage floor
+) payable;`}</CodeBlock>
+          <p className="mt-3 text-bone/65">
+            Self-custody. Your wallet signs. LastMeme never sees your BNB.
           </p>
         </DocsSection>
 
-        <DocsSection tag="&gt; 05_BETTING" title="THE BET POOL">
+        <DocsSection tag="05" title="SELL FLOW + FEE ROUTING">
           <p>
-            Separate from the settlement contract. Holders (or anyone) stake BNB on either side
-            during the 1-hour bet window. When the fight resolves:
+            This is the core mechanic. Four.Meme&apos;s <code className="text-hazard-yellow">sellToken</code>{" "}
+            takes a <span className="text-hazard-yellow">feeRecipient</span> parameter — an
+            arbitrary address the caller chooses at sell time. Normally this is used by trading
+            bots (GMGN, MEVX) as a referral earning hook.
           </p>
-          <ul className="mt-2 space-y-1.5 list-none pl-0">
+          <p className="mt-2">
+            When you sell a non-leader token through LastMeme, we set{" "}
+            <code className="text-hazard-yellow">feeRecipient</code> to the{" "}
+            <span className="text-hazard-yellow">cluster leader&apos;s creator address</span>.
+            Selling the leader sets it to the zero address (contract default).
+          </p>
+          <CodeBlock>{`function sellToken(
+  uint256 origin,         // 0 if not a third-party router
+  address token,          // the non-leader token you're selling
+  uint256 amount,         // how many tokens
+  uint256 minFunds,       // slippage floor on BNB out
+  uint256 feeRate,        // 0 = use contract default
+  address feeRecipient    // ← leader's creator address
+);`}</CodeBlock>
+          <p className="mt-3 text-bone/65">
+            <span className="text-hazard-yellow">Important:</span> this fee routing only applies
+            when users sell through the LastMeme UI. Selling on four.meme directly or via other
+            frontends sends fees to those UIs&apos; own recipient. There is no persistent on-chain
+            redirect — it&apos;s a per-call parameter.
+          </p>
+        </DocsSection>
+
+        <DocsSection tag="06" title="WHY NO OWN CONTRACT?">
+          <p>
+            Everything above is achievable without deploying anything. Buys and sells go to
+            Four.Meme&apos;s TokenManager V2. Fee routing is a parameter on the sell call.
+            Clustering is computed on our server and discarded every revalidation cycle.
+          </p>
+          <p className="mt-2 text-bone/70">
+            A LastMeme-owned contract would add: custody of user funds (liability), a trusted
+            verdict signer (centralization), audit requirements ($15K+), and legal exposure in
+            certain jurisdictions if it started to look like a prediction market. We deliberately
+            chose the stack that avoids all of this.
+          </p>
+        </DocsSection>
+
+        <DocsSection tag="07" title="HONEST LIMITATIONS">
+          <p>
+            <span className="text-hazard-yellow">Clustering isn&apos;t perfect.</span> Embeddings
+            on 2-word token names have a noise floor. Threshold 0.62 is tuned conservatively —
+            you will occasionally see a real match get missed or an unrelated pair get grouped.
+            Tune via <code className="text-hazard-yellow">SIMILARITY_THRESHOLD</code> in
+            src/lib/cluster.ts if forking.
+          </p>
+          <p className="mt-2">
+            <span className="text-hazard-yellow">Graduation breaks buys.</span> Once a Four.Meme
+            token crosses 100% bonding progress, it migrates to PancakeSwap and{" "}
+            <code>tryBuy</code> starts reverting. We detect the revert and surface a PancakeSwap
+            deep link.
+          </p>
+          <p className="mt-2">
+            <span className="text-hazard-yellow">Rate limits.</span> Four.Meme&apos;s API has
+            informal rate limits. We revalidate every 60s. If you put this behind heavy traffic,
+            add an edge cache or swap in Bitquery streams.
+          </p>
+        </DocsSection>
+
+        <DocsSection tag="08" title="STACK">
+          <ul className="mt-2 list-none space-y-1 pl-0 text-bone/80">
+            <li>Next.js 15 · React 19 · TypeScript</li>
+            <li>wagmi v2 · viem v2 · injected wallet connectors (MetaMask / Rabby / OKX / Trust)</li>
             <li>
-              <span className="text-hazard-yellow">&gt;</span> Winning side splits the losing side's
-              pool <em>pro-rata</em> by stake size
+              OpenAI {CONSTANTS.embeddingModel} · 1536-dim · cosine threshold{" "}
+              {CONSTANTS.threshold}
             </li>
-            <li>
-              <span className="text-hazard-yellow">&gt;</span> 2% platform cut funds protocol
-              maintenance
-            </li>
-            <li>
-              <span className="text-hazard-yellow">&gt;</span> Stakes locked until resolution — no
-              yanking
-            </li>
-            <li>
-              <span className="text-hazard-yellow">&gt;</span> Oracle-settled: once verdict hash
-              lands on-chain, payouts are automatic
-            </li>
+            <li>Tailwind v3 · custom brutalist design system</li>
+            <li>Deployed on Vercel · revalidate=60s on every page</li>
           </ul>
-        </DocsSection>
-
-        <DocsSection tag="&gt; 06_FAQ" title="FAQ">
-          <StepRow
-            n="Q"
-            title="Can I opt my token out?"
-            body={
-              <>
-                No. Clustering is automatic. If your token is unique (embedding doesn't match any
-                cluster centroid) it stays in <em>The Lonely</em> and never gets pulled into a
-                fight. If your token is derivative, well — that's the whole point.
-              </>
-            }
-          />
-          <StepRow
-            n="Q"
-            title="What if the AI clusters incorrectly?"
-            body={
-              <>
-                Every verdict pins its full evidence (embedding vectors, on-chain metrics, social
-                inputs, weights) to IPFS. Anyone can re-run the score with our open-source scorer
-                and verify. Disputes go to a human review queue.
-              </>
-            }
-          />
-          <StepRow
-            n="Q"
-            title="Does this need Four.Meme's permission?"
-            body={
-              <>
-                No. We read public events and call a public function with a public parameter
-                (feeRecipient) that Four.Meme designed to be swappable. Four.Meme benefits from
-                cleaner discovery and higher graduation rates — alignment is natural.
-              </>
-            }
-          />
-          <StepRow
-            n="Q"
-            title="What chains are supported?"
-            body={
-              <>
-                BSC (TokenManager V2). Arbitrum One and Base contracts exist; we'll expand once the
-                BSC version is battle-tested.
-              </>
-            }
-          />
-        </DocsSection>
-
-        <DocsSection tag="&gt; 07_STACK" title="THE STACK">
-          <CodeBlock>{`frontend   →  Next.js 15 · React 19 · Tailwind · D3 · Framer Motion
-indexer    →  Node · Bitquery GraphQL streams · Postgres + pgvector
-embedding  →  OpenAI text-embedding-3-small · CLIP vision
-scoring    →  Node · deterministic formulas · audited open source
-contract   →  Solidity · BSC · fee redirect via sellToken hook
-betting    →  Solidity · BSC · pro-rata payout contract
-verdict    →  IPFS pinned + on-chain hash commitment
-hosting    →  Vercel (frontend) · Railway (indexer)`}</CodeBlock>
-        </DocsSection>
-
-        <DocsSection tag="&gt; 08_LINKS" title="LINKS & CONTACTS">
-          <p>
-            github · <span className="text-hazard-yellow">github.com/penguinpecker/lastmeme</span>
-          </p>
-          <p>
-            x / twitter · <span className="text-hazard-yellow">@lastmemefm</span>
-          </p>
-          <p>
-            discord · <span className="text-hazard-yellow">discord.gg/lastmeme</span>
-          </p>
-          <p className="mt-4 text-bone/55">
-            built in 4 days for the four.meme ai sprint · april 2026
+          <p className="mt-4 text-bone/70">
+            Source: <a href="https://github.com/penguinpecker/lastmeme" className="text-hazard-yellow underline">github.com/penguinpecker/lastmeme</a>
           </p>
         </DocsSection>
       </div>
 
-      <Footer extra={["DOCS · v0.1"]} />
+      <Footer />
     </div>
   );
 }

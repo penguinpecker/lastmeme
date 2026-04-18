@@ -20,13 +20,13 @@ export function CountdownStrip({
 
   return (
     <p className="mt-3.5 font-mono text-[20px] tracking-wide text-bone/75">
-      VERDICT IN{" "}
+      REFRESH IN{" "}
       <span className="font-bold tabular-nums text-hazard-yellow">
         {formatCountdown(seconds)}
       </span>{" "}
-      · BET POOL{" "}
+      · CLUSTER LIQ{" "}
       <span className="font-bold text-hazard-yellow">{pool.toFixed(2)} BNB</span> ·{" "}
-      {overlap}% PRIOR-ART OVERLAP
+      {overlap.toFixed(0)}% AVG OVERLAP
     </p>
   );
 }

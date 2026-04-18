@@ -1,125 +1,87 @@
 # LastMeme.fm
 
-> Plagiarism court for memecoins. Live on BSC mainnet.
+> Similar-token clustering for Four.Meme. Live on BSC mainnet.
 
-**One cluster enters. One leaves.**
+**Group the copies. Back the leader. Trade on-chain.**
 
-LastMeme tails Four.Meme's launch firehose, clusters derivative tokens by name/symbol similarity, and lets the best one absorb the losers' creator fees for 7 days. Fighters are pulled from live BSC data. Buys execute on-chain via the Four.Meme TokenManager V2 contract. You self-custody — we never touch your funds.
+LastMeme tails Four.Meme's launches, groups visually/textually similar tokens into clusters using OpenAI embeddings, and highlights each cluster's leader (top by market cap). You can buy any token through the UI on the Four.Meme bonding curve. When you **sell** a non-leader token through the UI, the `feeRecipient` on the sell call routes the trading fee to the leader token's creator.
 
-## What's live
+No staking. No custody. No contract of ours holding anything.
 
-- **Real token feed** — GeckoTerminal public API (no key required) pulls trending + newly-created BSC pools every 60 seconds
-- **Real clustering** — local bigram Jaccard + substring similarity groups derivatives into buckets, picks a theme word, orders by liquidity
-- **Real pair-created timestamps** — every fighter card, undercard row, and firehose event shows the actual `pool_created_at` from GeckoTerminal
-- **Real on-chain buys** — `BuyTokenButton` calls `buyTokenAMAP(address,address,uint256,uint256)` on the Four.Meme proxy `0x5c95…0762b`. Live `tryBuy` quote, slippage, BSC chain detection, tx signing from your wallet, BscScan link
-- **Real wallet connection** — wagmi v2 + viem. Injected connector (MetaMask, Rabby, OKX, Binance Wallet, Trust)
+## What's real
 
-## What's mocked
+- **Four.Meme REST API** — `POST /meme-api/v1/public/token/ranking` with `type=PROGRESS` and `type=VOL_DAY_1`. Real tokens, real market cap, real creator addresses
+- **OpenAI embeddings** — `text-embedding-3-small` server-side, 1536-dim, single-linkage agglomerative clustering with cosine threshold 0.62
+- **On-chain buy flow** — `buyTokenAMAP(token, to, funds, minAmount)` on Four.Meme TokenManager V2 (proxy `0x5c95...0762b`)
+- **On-chain sell flow with fee routing** — `sellToken(origin=0, token, amount, minFunds, feeRate=0, feeRecipient=leaderCreator)`. `feeRecipient` is the cluster leader's creator address pulled from Four.Meme's `userAddress` field
+- **Self-custody everywhere** — injected wallet (MetaMask/Rabby/OKX/Trust/Binance Wallet), you sign every transaction
 
-- **Hall of Shame verdicts** — simulated until the resolver contract ships. A banner on `/shame` makes this explicit
-- **Bet pool** — the pro-rata BNB bet pool requires its own Solidity contract. The UI previously showing bet stakes was removed; the fight page is now purely a "discovery + buy" interface until that contract deploys
+## What it doesn't do
+
+- No bet pool, no prediction market, no verdict resolution
+- No fee redirect after the fact — `feeRecipient` is a per-call parameter, so the routing only applies when sells are made through the LastMeme UI
+- No LastMeme-owned smart contract. Deliberately
 
 ## Stack
 
 | Layer | Tech |
 | --- | --- |
 | Framework | Next.js 15 App Router · React 19 · TypeScript |
-| Data | GeckoTerminal API (public, no key) · server-side `fetch` with `revalidate: 60` |
-| Clustering | Local bigram Jaccard + substring containment, pure TypeScript |
-| Web3 | wagmi v2 · viem v2 · BSC mainnet (chainId 56) · injected connector |
+| Data source | Four.Meme public REST API (no auth, no key) |
+| Clustering | OpenAI `text-embedding-3-small` (server-side), fallback bigram Jaccard |
+| Web3 | wagmi v2 · viem v2 · BSC mainnet (chainId 56) · injected connectors |
 | Contracts | Four.Meme TokenManager V2 @ `0xF251F83e40a78868FcfA3FA4599Dad6494E46034` via proxy `0x5c952063c7fc8610FFDB798152D69F0B9550762b` |
 | Styling | Tailwind v3 · custom brutalist design system |
 | Fonts | VT323 · Archivo Black · JetBrains Mono |
-| Visuals | D3 force-directed cluster graph · CSS keyframe collision FX |
 
-## Quick start
+## Setup
 
 ```bash
 npm install
-npm run dev
 ```
 
-Open `http://localhost:3000`. No env vars needed. The Discovery and Compete pages will fetch live BSC data on first request and cache for 60s.
+### Environment variables
 
-### Environment variables (all optional)
-
-| Var | Default | What for |
+| Var | Required | What for |
 | --- | --- | --- |
-| `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` | not used | Only needed if you add the WalletConnect connector back |
+| `OPENAI_API_KEY` | recommended | Server-side OpenAI key for embedding clustering. If missing, falls back to bigram Jaccard |
 
-Injected wallets (MetaMask etc.) work out of the box without any env vars.
+Inject the key in Vercel under Project Settings → Environment Variables. **Never put it in a `NEXT_PUBLIC_*` var** — it must stay server-only.
+
+```bash
+npm run dev
+# opens at http://localhost:3000
+```
+
+No wallet or env needed to browse. Connecting a wallet is only needed to buy/sell.
 
 ## Pages
 
-| Route | What's there |
+| Route | What |
 | --- | --- |
-| `/` | **Discovery** — live firehose, D3 cluster graph, cluster grid (filterable), unclustered "Lonely" tokens section |
-| `/fights/[id]` | **Compete** — dynamic route: `id` can be a fight number (e.g. `0047`) or a cluster id (e.g. `frog`). Shows real pair-creation timestamps for both fighters, collision FX, tale of the tape, real `tryBuy` quote + slippage picker, real swap, undercard table with all cluster members |
-| `/queue` | **Queue** — live cluster queue sorted by status rank then ETA |
-| `/shame` | **Hall of Shame** — simulated verdicts (banner notes until resolver deploys) |
-| `/docs` | **Docs** — 8 sections: pipeline, scoring formula, settlement contract, betting, FAQ, stack, links |
+| `/` | **Clusters** — live firehose, D3 cluster graph, cluster grid, lonely-tokens section |
+| `/fights/[id]` | **Cluster detail** — top-2 by market cap, tale-of-the-tape, buy/sell buttons with fee-routing notice, full undercard table |
+| `/queue` | **Queue** — clusters sorted by status + activity |
+| `/docs` | **Docs** — 8 sections explaining data source, clustering, buy/sell flow, fee routing, limits |
 
-## How the buy works
+## The fee routing mechanic in one paragraph
 
-1. User clicks `BUY_RED_CORNER` or `BUY_BLUE_CORNER`
-2. Drawer opens, fetches a live quote from `TokenManager2.tryBuy(token, 0, funds)` via `publicClient.readContract`
-3. Quote returns `(tokenManager, quote, estimatedAmount, estimatedCost, estimatedFee, amountMsgValue, amountApproval, amountFunds)`
-4. User picks amount (preset chips or custom input) and slippage (1/5/10/20%)
-5. `minAmount` = `estimatedAmount * (10000 - slippageBps) / 10000`
-6. On confirm, `writeContract` calls `buyTokenAMAP(token, recipient, funds, minAmount)` with `value: funds` from the user's wallet
-7. `useWaitForTransactionReceipt` watches for confirmation
-8. BscScan link appears once mined
-
-The contract is the same one Four.Meme's own site uses. If the token has already graduated from the bonding curve to PancakeSwap, `tryBuy` reverts and we show "Token may already be on PancakeSwap — use four.meme directly" with a deep link.
-
-## Project structure
-
-```
-src/
-├── app/
-│   ├── layout.tsx                # <Web3Providers> root wrap
-│   ├── globals.css               # design system
-│   ├── page.tsx                  # Discovery (loadLiveData)
-│   ├── fights/[id]/page.tsx      # Compete (loadLiveData + fightBuilder)
-│   ├── queue/page.tsx            # Queue (loadLiveData)
-│   ├── shame/page.tsx            # Hall of Shame (still mock)
-│   └── docs/page.tsx             # Docs
-├── components/
-│   ├── shared/                   # TopNav, Marquee, Hero, KpiBar, Footer, Spark, Web3Providers
-│   ├── discovery/                # FirehoseFeed, ClusterGrid, ClusterCard, ClusterGraph, UnclusteredGrid
-│   ├── compete/                  # Ring, FighterCard, HealthBar, Collision, TaleOfTheTape, PriorArt, Undercard, CountdownStrip, BuyTokenButton
-│   ├── queue/                    # QueueRow
-│   ├── shame/                    # VerdictCard
-│   └── docs/                     # DocsSection
-└── lib/
-    ├── types.ts                  # all TypeScript types
-    ├── fourmeme.ts               # GeckoTerminal client, pool → Token normalization
-    ├── cluster.ts                # Local clustering engine (bigram Jaccard)
-    ├── loadData.ts               # Server entry: loadLiveData() — called by all pages
-    ├── fightBuilder.ts           # Turn a cluster + tokens into FightDetail
-    ├── contracts.ts              # Four.Meme ABI + proxy address constants
-    ├── wagmi.ts                  # BSC-only wagmi config
-    ├── utils.ts                  # cn(), formatBnb(), formatCountdown()
-    └── mock.ts                   # Only used by shame/docs/TopNav for constants
-```
+Four.Meme's `sellToken(origin, token, amount, minFunds, feeRate, feeRecipient)` lets the caller choose who receives the trading fee on that particular sell. By default, other UIs set it to themselves as an affiliate earning. We set it to the **cluster leader's creator address** — the wallet that deployed the top token (by market cap) in the similar-token group. So when you sell a lookalike of `$PEPE2` while the cluster leader is `$PEPE`, `$PEPE`'s creator earns the fee from your sell. This only applies to sells made through the LastMeme UI. No persistent on-chain redirect exists.
 
 ## Deploy
 
 ```bash
-npm run build
-# or
 vercel --prod
 ```
 
-Works out of the box on Vercel. Functions default to Node runtime so `fetch` caching via `revalidate: 60` works correctly.
+Works out of the box on Vercel. Add `OPENAI_API_KEY` to project env vars.
 
-## Safety / disclaimers
+## Safety
 
-- Buys execute **from the user's own wallet** to the Four.Meme proxy. Neither LastMeme's frontend nor any LastMeme contract touches user funds
-- Slippage protection via `minAmount` is enforced on-chain. A 5% default is applied; users can adjust 1–20%
-- We do not filter or blocklist tokens. Honeypots and scams exist on Four.Meme. Do your own research
-- The cluster similarity engine is deliberately conservative but can false-positive. A "derivative" classification is not a judgment about legitimacy — same name doesn't mean same team
-- Settlement / fee-redirect / bet-pool contracts are not deployed. The Hall of Shame is simulated until they ship
+- Trades execute from the user's own wallet to Four.Meme's proxy contract. LastMeme never touches funds
+- Slippage protection via `minAmount` (buy) / `minFunds` (sell) is enforced on-chain
+- Token approval on sell is requested separately before the sell transaction — the approve amount is `amountToSell + 1` token, not unlimited
+- We don't filter or blocklist tokens. Honeypots exist on Four.Meme. DYOR
 
 ## Built by
 
@@ -127,9 +89,9 @@ Works out of the box on Vercel. Functions default to Node runtime so `fetch` cac
 
 ---
 
-**Contract references**
+**Reference contracts**
 
 - Four.Meme TokenManager V2 proxy: [`0x5c952063c7fc8610FFDB798152D69F0B9550762b`](https://bscscan.com/address/0x5c952063c7fc8610FFDB798152D69F0B9550762b)
-- Four.Meme TokenManager V2 implementation: [`0xF251F83e40a78868FcfA3FA4599Dad6494E46034`](https://bscscan.com/address/0xF251F83e40a78868FcfA3FA4599Dad6494E46034)
-- BSC RPC used: `https://bsc-dataseed.bnbchain.org`
-- Data source: `https://api.geckoterminal.com/api/v2/networks/bsc/*`
+- Four.Meme TokenManager V2 impl: [`0xF251F83e40a78868FcfA3FA4599Dad6494E46034`](https://bscscan.com/address/0xF251F83e40a78868FcfA3FA4599Dad6494E46034)
+- BSC RPC: `https://bsc-dataseed.bnbchain.org`
+- Four.Meme API base: `https://four.meme/meme-api/v1/public/*`

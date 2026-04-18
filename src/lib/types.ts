@@ -31,6 +31,9 @@ export interface Token {
   killedById?: string;
   graduatedAt?: number | null;
   fourMemeUrl?: string;
+  creatorAddress?: string;
+  imgUrl?: string;
+  description?: string;
 }
 
 export interface Cluster {
@@ -49,27 +52,16 @@ export interface Cluster {
   originalCreatedAt?: string;
   originalSymbol?: string;
   tokenIds?: string[];
-}
-
-export interface Verdict {
-  id: string;
-  fightId: string;
-  clusterTheme: string;
-  winner: string;
-  losers: string[];
-  resolvedAt: string;
-  feeRedirectBnb: number;
-  overlapPct: number;
-  daysLeft: number;
-  scoreA: number;
-  scoreB: number;
-  ipfsHash: string;
+  /** The current cluster leader — highest market cap. Fees route to their creator. */
+  leaderAddress?: string;
+  leaderCreator?: string;
+  leaderSymbol?: string;
 }
 
 export interface FirehoseEvent {
   id: string;
   time: string;
-  type: "NEW" | "MATCH" | "UNCLUSTERED" | "CLUSTER" | "VERDICT";
+  type: "NEW" | "MATCH" | "UNCLUSTERED" | "CLUSTER";
   primary: string;
   secondary?: string;
   accent?: string;

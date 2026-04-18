@@ -49,13 +49,13 @@ export default async function QueuePage() {
       />
 
       <Hero
-        kicker=">> QUEUE // UPCOMING FIGHTS // LIVE ON BSC"
+        kicker=">> QUEUE // INCOMING CLUSTERS // LIVE ON BSC"
         line1="THE WAITING"
         line2="ROOM"
         sub={
           <>
-            {fighting} FIGHTING · {queued} QUEUED · {forming} FORMING · EVERY DERIVATIVE GETS{" "}
-            <span className="font-bold text-hazard-yellow">ITS DAY IN COURT.</span>
+            {fighting} LIVE · {queued} QUEUED · {forming} FORMING · EVERY COPYCAT CLUSTER{" "}
+            <span className="font-bold text-hazard-yellow">GETS A ROW.</span>
           </>
         }
       />

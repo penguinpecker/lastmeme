@@ -1,233 +1,339 @@
-import type { Cluster, Token, TokenStatus } from "./types";
+import type { Token, Cluster, TokenStatus } from "./types";
 
 /**
- * Local clustering engine — no OpenAI key required.
+ * OpenAI embeddings-based clusterer.
+ *
+ * SERVER-SIDE ONLY. Reads OPENAI_API_KEY from process.env.
  *
  * Strategy:
- *  1. Normalize token name + symbol into a lowercase token bag + character bigrams
- *  2. Score pairwise similarity as (bigram Jaccard) * 0.65 + (substring containment) * 0.35
- *  3. Greedy single-pass: assign each token to the best-matching existing cluster
- *     if similarity >= THRESHOLD, else start a new cluster
- *  4. Cluster name = most frequent non-filler word among member names (fallback: first token's ticker)
+ *   1. Build a short text prompt per token (name + symbol + tag)
+ *   2. Batch-embed via text-embedding-3-small (cheap, fast, dim=1536)
+ *   3. Single-linkage agglomerative clustering on cosine similarity
+ *   4. Rank clusters by leader's market cap
+ *   5. Drop any cluster with < 2 members (surfaced separately as "lonely")
  *
- * This is deliberately CPU-cheap. For the real product we'd use OpenAI embeddings
- * + pgvector but for <100 tokens this is visually indistinguishable and runs
- * in milliseconds server-side with zero API cost.
+ * Fallback: if OPENAI_API_KEY is unset or the API is unreachable, we fall back to
+ * a simple bigram-Jaccard clusterer so the app still renders something useful.
  */
 
-const THRESHOLD = 0.55;
-const FILLER = new Set([
-  "coin",
-  "token",
-  "the",
-  "bnb",
-  "bsc",
-  "meme",
-  "memes",
-  "pepe",
-  "maxi",
-  "base",
-  "v2",
-  "v3",
-  "v4",
-  "pump",
-  "ai",
-  "eth",
-  "usd",
-  "inu",
-  "doge",
-  "cat",
-  "lord",
-  "god",
-  "king",
-]);
+const SIMILARITY_THRESHOLD = 0.62; // tuned for text-embedding-3-small on short meme names
+const EMBEDDING_MODEL = "text-embedding-3-small";
+const EMBEDDING_DIM = 1536;
+const MAX_BATCH = 96;
 
-function norm(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, "").replace(/\s+/g, " ").trim();
+function tokenPromptText(t: Token): string {
+  // Compress token identity into a stable prompt. Short names cluster poorly
+  // so we also inject the tag (usually "Meme") and any notable tokens in the name.
+  const parts = [
+    t.name?.trim() || "",
+    t.symbol.replace(/^\$/, ""),
+    t.slug,
+  ].filter(Boolean);
+  return parts.join(" ").slice(0, 200);
 }
 
-function bigrams(s: string): Set<string> {
-  const out = new Set<string>();
-  const n = norm(s).replace(/\s/g, "");
-  for (let i = 0; i < n.length - 1; i++) out.add(n.slice(i, i + 2));
-  return out;
-}
+async function fetchEmbeddings(texts: string[]): Promise<number[][] | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
 
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 1;
-  let inter = 0;
-  for (const x of a) if (b.has(x)) inter++;
-  const union = a.size + b.size - inter;
-  return union === 0 ? 0 : inter / union;
-}
-
-function substringScore(a: string, b: string): number {
-  const na = norm(a);
-  const nb = norm(b);
-  if (!na || !nb) return 0;
-  const short = na.length < nb.length ? na : nb;
-  const long = na.length < nb.length ? nb : na;
-  if (short.length < 3) return 0;
-  if (long.includes(short)) return 1;
-  // longest common substring length / short length
-  let best = 0;
-  for (let i = 0; i < short.length; i++) {
-    for (let j = i + 3; j <= short.length; j++) {
-      if (long.includes(short.slice(i, j)) && j - i > best) best = j - i;
+  const results: number[][] = [];
+  for (let i = 0; i < texts.length; i += MAX_BATCH) {
+    const batch = texts.slice(i, i + MAX_BATCH);
+    try {
+      const res = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: EMBEDDING_MODEL,
+          input: batch,
+          dimensions: EMBEDDING_DIM,
+        }),
+      });
+      if (!res.ok) {
+        console.error("[cluster] OpenAI embeddings failed:", res.status, await res.text());
+        return null;
+      }
+      const json = (await res.json()) as {
+        data: { embedding: number[]; index: number }[];
+      };
+      const sorted = [...json.data].sort((a, b) => a.index - b.index);
+      for (const item of sorted) results.push(item.embedding);
+    } catch (e) {
+      console.error("[cluster] OpenAI embeddings exception:", e);
+      return null;
     }
   }
-  return best / short.length;
+  return results;
 }
 
-function similarity(a: Token, b: Token): number {
-  const aText = `${a.name ?? ""} ${a.symbol.replace("$", "")}`;
-  const bText = `${b.name ?? ""} ${b.symbol.replace("$", "")}`;
-  const jac = jaccard(bigrams(aText), bigrams(bText));
-  const sub = substringScore(aText, bText);
-  return jac * 0.65 + sub * 0.35;
+function cosineSim(a: number[], b: number[]): number {
+  let dot = 0,
+    na = 0,
+    nb = 0;
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-function clusterAvgSimilarity(token: Token, cluster: Token[]): number {
-  if (cluster.length === 0) return 0;
-  const sims = cluster.map((m) => similarity(token, m));
-  return sims.reduce((a, b) => a + b, 0) / sims.length;
+/** Single-linkage agglomerative clustering on precomputed embeddings */
+function clusterByEmbedding(
+  embeddings: number[][],
+  threshold: number,
+): number[][] {
+  const n = embeddings.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  const union = (a: number, b: number) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const sim = cosineSim(embeddings[i], embeddings[j]);
+      if (sim >= threshold) union(i, j);
+    }
+  }
+
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r)!.push(i);
+  }
+  return [...groups.values()];
 }
 
-function pickTheme(members: Token[]): string {
-  const freq = new Map<string, number>();
+/** Fallback clusterer — bigram Jaccard similarity on symbol+name. Used when OPENAI_API_KEY is absent. */
+function bigramJaccardFallback(tokens: Token[]): number[][] {
+  const bigramSet = (s: string): Set<string> => {
+    const norm = s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const out = new Set<string>();
+    for (let i = 0; i < norm.length - 1; i++) out.add(norm.slice(i, i + 2));
+    return out;
+  };
+  const jaccard = (a: Set<string>, b: Set<string>) => {
+    if (a.size === 0 && b.size === 0) return 0;
+    let inter = 0;
+    for (const x of a) if (b.has(x)) inter++;
+    return inter / (a.size + b.size - inter);
+  };
+  const sigs = tokens.map((t) => bigramSet((t.name ?? "") + " " + t.symbol));
+  const n = tokens.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  const union = (a: number, b: number) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (jaccard(sigs[i], sigs[j]) >= 0.5) union(i, j);
+    }
+  }
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r)!.push(i);
+  }
+  return [...groups.values()];
+}
+
+function deriveTheme(members: Token[]): string {
+  // Pick the most common alphabetic word across the cluster's names
+  const wordCounts = new Map<string, number>();
   for (const m of members) {
-    const words = norm(`${m.name ?? ""} ${m.symbol.replace("$", "")}`).split(" ");
-    for (const w of words) {
-      if (w.length < 3 || FILLER.has(w)) continue;
-      freq.set(w, (freq.get(w) ?? 0) + 1);
+    const words = (m.name ?? m.symbol)
+      .toLowerCase()
+      .replace(/[^a-z\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 3);
+    for (const w of words) wordCounts.set(w, (wordCounts.get(w) ?? 0) + 1);
+  }
+  let best = "";
+  let bestCount = 0;
+  for (const [w, c] of wordCounts) {
+    if (c > bestCount) {
+      bestCount = c;
+      best = w;
     }
   }
-  if (freq.size === 0) return members[0]?.symbol.replace("$", "") ?? "UNTITLED";
-  const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length);
-  return sorted[0][0].toUpperCase();
+  return (best || members[0].symbol.replace(/^\$/, "")).toUpperCase();
 }
 
-function statusForIdx(idx: number, total: number): TokenStatus {
-  if (idx === 0 || idx === 1) return "IN_RING";
-  if (idx < 4) return "NEXT_UP";
-  if (idx >= total - 2 && total > 4) return "EATEN";
+function avgPairSim(members: number[], embeddings: number[][]): number {
+  if (members.length < 2) return 0;
+  let total = 0;
+  let count = 0;
+  for (let i = 0; i < members.length; i++) {
+    for (let j = i + 1; j < members.length; j++) {
+      total += cosineSim(embeddings[members[i]], embeddings[members[j]]);
+      count++;
+    }
+  }
+  return count > 0 ? total / count : 0;
+}
+
+function statusFromAge(ageHours: number): TokenStatus {
+  if (ageHours < 6) return "NEXT_UP";
+  if (ageHours < 48) return "IN_RING";
   return "QUEUED";
 }
 
-/**
- * @returns { clusters, tokens, unclustered } where `tokens` has updated clusterId + status
- */
-export function clusterTokens(input: Token[]): {
-  clusters: Cluster[];
-  tokens: Token[];
-  unclustered: Token[];
-} {
-  const buckets: Token[][] = [];
+function clusterStatus(members: Token[]): "FIGHTING" | "RESOLVING" | "QUEUED" | "NEW" {
+  if (members.length >= 5) return "FIGHTING";
+  if (members.length >= 3) return "QUEUED";
+  return "NEW";
+}
 
-  // Greedy assignment
-  for (const t of input) {
-    let best = -1;
-    let bestScore = 0;
-    for (let i = 0; i < buckets.length; i++) {
-      const score = clusterAvgSimilarity(t, buckets[i]);
-      if (score > bestScore) {
-        bestScore = score;
-        best = i;
-      }
-    }
-    if (best >= 0 && bestScore >= THRESHOLD) {
-      buckets[best].push(t);
-    } else {
-      buckets.push([t]);
-    }
+export interface ClusterResult {
+  clusters: Cluster[];
+  clusteredTokens: Token[];
+  unclusteredTokens: Token[];
+  engine: "openai-embeddings" | "bigram-jaccard-fallback";
+  error?: string;
+}
+
+/**
+ * Main clustering entry point. Takes normalized Four.Meme tokens, returns clusters
+ * ordered by leader market cap. Tokens in clusters of size 1 are surfaced as
+ * unclustered (the "Lonely" section).
+ */
+export async function clusterTokens(tokens: Token[]): Promise<ClusterResult> {
+  if (tokens.length === 0) {
+    return {
+      clusters: [],
+      clusteredTokens: [],
+      unclusteredTokens: [],
+      engine: "openai-embeddings",
+    };
   }
 
-  // Only buckets with >= 2 members are "clusters"; singletons are unclustered.
+  const prompts = tokens.map(tokenPromptText);
+  let embeddings = await fetchEmbeddings(prompts);
+  let engine: ClusterResult["engine"] = "openai-embeddings";
+  let groups: number[][];
+  let fallbackError: string | undefined;
+
+  if (!embeddings) {
+    engine = "bigram-jaccard-fallback";
+    fallbackError = process.env.OPENAI_API_KEY
+      ? "OpenAI embeddings unreachable, falling back to bigram similarity"
+      : "OPENAI_API_KEY not set, using bigram similarity fallback";
+    groups = bigramJaccardFallback(tokens);
+    // Fake embeddings for avgPairSim — use 1.0 for same group, 0 otherwise
+    embeddings = tokens.map((_, i) => {
+      const v = new Array(EMBEDDING_DIM).fill(0);
+      v[i % EMBEDDING_DIM] = 1;
+      return v;
+    });
+  } else {
+    groups = clusterByEmbedding(embeddings, SIMILARITY_THRESHOLD);
+  }
+
   const clusters: Cluster[] = [];
-  const outTokens: Token[] = [];
-  const unclustered: Token[] = [];
+  const clusteredTokens: Token[] = [];
+  const unclusteredTokens: Token[] = [];
 
-  buckets.forEach((bucket, bIdx) => {
-    if (bucket.length < 2) {
-      for (const t of bucket) unclustered.push({ ...t, clusterId: "unclustered", status: "QUEUED" });
-      return;
+  for (const memberIdxs of groups) {
+    if (memberIdxs.length < 2) {
+      unclusteredTokens.push({ ...tokens[memberIdxs[0]], clusterId: "" });
+      continue;
     }
 
-    // Sort bucket members descending by liquidity (strongest = in-ring first)
-    const sorted = [...bucket].sort((a, b) => (b.liquidityUsd ?? 0) - (a.liquidityUsd ?? 0));
-    const theme = pickTheme(sorted);
-    const id = theme.toLowerCase();
+    const members = memberIdxs.map((i) => tokens[i]);
+    // Sort by market cap descending — first is the leader
+    const sorted = [...members].sort((a, b) => (b.marketCapUsd ?? 0) - (a.marketCapUsd ?? 0));
+    const leader = sorted[0];
+    const theme = deriveTheme(sorted);
+    const clusterId = `${theme.toLowerCase()}-${leader.address?.slice(2, 8) ?? "x"}`;
 
-    // Average pairwise similarity for the overlap %
-    let sumSim = 0;
-    let pairs = 0;
-    for (let i = 0; i < sorted.length; i++) {
-      for (let j = i + 1; j < sorted.length; j++) {
-        sumSim += similarity(sorted[i], sorted[j]);
-        pairs++;
-      }
-    }
-    const avgOverlap = pairs > 0 ? sumSim / pairs : THRESHOLD;
+    const overlap =
+      engine === "openai-embeddings" ? avgPairSim(memberIdxs, embeddings) : 0.65;
 
-    // Pool = sum of top-2 member liquidity in BNB
-    const poolBnb = (sorted[0]?.liquidityBnb ?? 0) + (sorted[1]?.liquidityBnb ?? 0);
-
-    // Fight status: if we have 5+ members and top-2 both have >0.1 BNB liquidity → FIGHTING
-    const fighting = sorted.length >= 2 && (sorted[0].liquidityBnb ?? 0) > 0.05 && (sorted[1].liquidityBnb ?? 0) > 0.05;
-    const status: Cluster["status"] =
-      sorted.length < 4 ? "NEW" : fighting ? "FIGHTING" : "QUEUED";
-
-    // Earliest member = "the original" by pool_created_at
-    const originalMember = [...sorted].sort((a, b) =>
-      (a.createdAtIso ?? "").localeCompare(b.createdAtIso ?? ""),
-    )[0];
-
-    // Update each member token with cluster id + ring status
-    const members: TokenStatus[] = [];
-    sorted.forEach((t, idx) => {
-      const status = statusForIdx(idx, sorted.length);
-      outTokens.push({ ...t, clusterId: id, status, killedById: status === "EATEN" ? sorted[0]?.id : undefined });
-      members.push(status);
+    const memberStatuses: TokenStatus[] = sorted.map((m, i) => {
+      if (i === 0) return "IN_RING";
+      if (i === 1) return "NEXT_UP";
+      return statusFromAge(m.ageHours);
     });
 
-    // ETA labels — if FIGHTING, synth a countdown; else queued by bucket order
-    const etaSeconds = status === "FIGHTING" ? 2400 + bIdx * 300 : status === "NEW" ? 0 : 900 + bIdx * 1800;
-    const etaLabel = status === "NEW"
-      ? "FORMING"
-      : status === "FIGHTING"
-      ? `${Math.floor(etaSeconds / 60)}:${(etaSeconds % 60).toString().padStart(2, "0")} LEFT`
-      : etaSeconds < 3600
-      ? `STARTS IN ${Math.floor(etaSeconds / 60)}M`
-      : `STARTS IN ${Math.floor(etaSeconds / 3600)}H ${Math.floor((etaSeconds % 3600) / 60)}M`;
+    for (let i = 0; i < sorted.length; i++) {
+      clusteredTokens.push({
+        ...sorted[i],
+        clusterId,
+        status: memberStatuses[i],
+      });
+    }
 
-    const fightId = (47 + bIdx).toString().padStart(4, "0");
+    const poolBnb = sorted.reduce((s, m) => s + m.liquidityBnb, 0);
+    const fighters: [string, string] = [
+      sorted[0].symbol,
+      sorted[1]?.symbol ?? sorted[0].symbol,
+    ];
+    const fighterAddresses: [string | undefined, string | undefined] = [
+      sorted[0].address,
+      sorted[1]?.address,
+    ];
 
     clusters.push({
-      id,
+      id: clusterId,
       theme,
-      status,
+      status: clusterStatus(sorted),
       tokenCount: sorted.length,
-      overlapPct: Math.round(avgOverlap * 100),
-      poolBnb: Number(poolBnb.toFixed(2)),
-      fightId: status === "FIGHTING" ? fightId : undefined,
-      fighters: [sorted[0]?.symbol ?? "—", sorted[1]?.symbol ?? "—"],
-      fighterAddresses: [sorted[0]?.address, sorted[1]?.address],
-      members,
-      etaLabel,
-      etaSeconds,
-      originalCreatedAt: originalMember?.createdAtIso,
-      originalSymbol: originalMember?.symbol,
-      tokenIds: sorted.map((t) => t.id),
+      overlapPct: overlap * 100,
+      poolBnb,
+      fightId: `${(clusters.length + 47).toString().padStart(4, "0")}`,
+      fighters,
+      fighterAddresses,
+      members: memberStatuses,
+      etaLabel: "LIVE",
+      etaSeconds: 0,
+      originalCreatedAt: sorted[0].createdAtIso,
+      originalSymbol: sorted[0].symbol,
+      tokenIds: sorted.map((m) => m.id),
+      leaderAddress: leader.address,
+      leaderCreator: leader.creatorAddress,
+      leaderSymbol: leader.symbol,
     });
-  });
+  }
 
-  // Order clusters: fighting first, then new, then queued; and by most-members descending
+  // Order clusters by leader market cap descending
   clusters.sort((a, b) => {
-    const rank = (s: Cluster["status"]) =>
-      s === "RESOLVING" ? 0 : s === "FIGHTING" ? 1 : s === "NEW" ? 2 : 3;
-    if (rank(a.status) !== rank(b.status)) return rank(a.status) - rank(b.status);
-    return b.tokenCount - a.tokenCount;
+    const capA =
+      clusteredTokens.find((t) => t.address === a.leaderAddress)?.marketCapUsd ?? 0;
+    const capB =
+      clusteredTokens.find((t) => t.address === b.leaderAddress)?.marketCapUsd ?? 0;
+    return capB - capA;
   });
 
-  return { clusters, tokens: outTokens, unclustered };
+  return {
+    clusters,
+    clusteredTokens,
+    unclusteredTokens,
+    engine,
+    error: fallbackError,
+  };
 }
