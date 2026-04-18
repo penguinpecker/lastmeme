@@ -8,12 +8,19 @@ function buildStatBars(a: Token, b: Token): FightDetail["statBars"] {
   const [holdA, holdB] = total(a.holders, b.holders);
   const [volA, volB] = total(a.volume24hUsd ?? 0, b.volume24hUsd ?? 0);
   const [liqA, liqB] = total(a.liquidityUsd ?? 0, b.liquidityUsd ?? 0);
-  const [buyA, buyB] = total(a.buyersH1 ?? 0, b.buyersH1 ?? 0);
   const volLiqA = a.volLiqRatio;
   const volLiqB = b.volLiqRatio;
   const [vlA, vlB] = total(volLiqA, volLiqB);
+  const [capA, capB] = total(a.marketCapUsd ?? 0, b.marketCapUsd ?? 0);
 
   return [
+    {
+      label: "MARKETCAP",
+      valueA: `$${Math.round(a.marketCapUsd ?? 0).toLocaleString()}`,
+      valueB: `$${Math.round(b.marketCapUsd ?? 0).toLocaleString()}`,
+      fillA: Math.round(capA),
+      fillB: Math.round(capB),
+    },
     {
       label: "HOLDERS",
       valueA: a.holders.toString(),
@@ -41,13 +48,6 @@ function buildStatBars(a: Token, b: Token): FightDetail["statBars"] {
       valueB: `${volLiqB.toFixed(1)}×`,
       fillA: Math.round(vlA),
       fillB: Math.round(vlB),
-    },
-    {
-      label: "BUYERS 1H",
-      valueA: (a.buyersH1 ?? 0).toString(),
-      valueB: (b.buyersH1 ?? 0).toString(),
-      fillA: Math.round(buyA),
-      fillB: Math.round(buyB),
     },
   ];
 }
